@@ -1,166 +1,129 @@
-# Speech Adapter Merging
+# Model Merging and Task Overfitting in Speech LLMs
 
-This repository contains the research code for a thesis project on LoRA adapter composition for speech-language models. It trains task-specific adapters for Qwen2.5-Omni-3B, evaluates their in-task and cross-task behavior, and studies whether independently trained adapters can be combined to recover useful multi-task performance without full retraining.
+Independently trained LoRA adapters for a 3B-parameter Speech LLM quietly break each other's tasks. This project measures that failure, diagnoses it, and fixes it with calibrated post-hoc merging — no joint retraining required.
 
-## Research Question
+[![Thesis PDF](https://img.shields.io/badge/MEng_thesis-PDF-b31b1b?logo=adobeacrobatreader&logoColor=white)](docs/Rajaram_2026_MEng_Thesis_Model_Merging_Speech_LLMs.pdf)
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.9-EE4C2C?logo=pytorch&logoColor=white)
+![Backbone](https://img.shields.io/badge/backbone-Qwen2.5--Omni--3B-6f42c1)
+![University of Cambridge](https://img.shields.io/badge/University_of_Cambridge-MEng_thesis-a3c1ad)
+[![License](https://img.shields.io/badge/license-Apache_2.0-blue)](LICENSE.md)
 
-Single-task LoRA adapters are efficient to train, but they can overfit to narrow task formats. In speech-language systems, that problem is especially visible because tasks vary widely: ASR and speech translation are generation tasks, while intent, language ID, speaker, emotion, and vocal sound tasks are classification-style tasks.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/recovery-dark.png">
+    <img src="assets/recovery-light.png" alt="Mean and worst-task recovery for six ways of combining seven speech-task adapters. Layer-wise calibrated merging reaches 1.011 mean and 0.773 worst-task recovery, the best of all methods." width="820">
+  </picture>
+</p>
 
-The project asks:
+## Overview
 
-> Can independently trained speech adapters be combined after training to improve multi-task generalization while avoiding the cost and sensitivity of full joint multi-task training?
+A Speech LLM answers every task — transcription, intent, emotion, language ID, speaker verification — through one shared decoder. LoRA lets you train a cheap, separately stored adapter per task, which *looks* modular. It isn't: an adapter can excel on its own task while degrading tasks it never saw. This thesis calls that **task overfitting**, shows that single-task evaluation cannot detect it, and asks whether independently trained adapters can still be combined into one reliable multi-task model by calibrating *how much* each contributes.
 
-The codebase supports experiments that compare:
+Experiments cover **7 speech tasks** (ASR, emotion, intent, keyword spotting, language ID, speaker verification, vocal sounds) on a frozen **Qwen2.5-Omni-3B** backbone, comparing post-hoc merging against a capacity-matched multi-task learning (MTL) baseline and continual task-addition.
 
-- the base Qwen2.5-Omni-3B model,
-- single-task LoRA adapters,
-- joint multi-task adapters,
-- merged adapter variants,
-- continual updates that add new task capability to existing adapter sets.
+## Key results
 
-## What The Code Does
+- **Task overfitting is real, directional and invisible to single-task evaluation.** The intent adapter lifts its own task from 54.0% to 85.5% accuracy — and drops language-ID accuracy from 88.4% to **59.5%**. Task vectors are near-orthogonal (pairwise cosine −0.003 to 0.045), so weight-space geometry doesn't predict which pairs collide.
+- **The failure is magnitude, not direction.** Naive averaging recovers only **0.551** of single-task gains. One globally calibrated scalar lifts that to **0.956**; supervised **layer-wise** calibration (296 scalars over fixed task vectors) reaches **1.011 mean** and **0.773 worst-task** recovery — the best of every method tested, including TIES and DARE.
+- **Competitive with joint retraining, at a fraction of the data.** Matched MTL wins on non-ASR mean recovery (0.997), but layer-wise merging gives better worst-task balance and lower ASR WER (1.81% vs 2.24% on test-clean; 4.00% vs 5.74% on test-other), while using **16× fewer training examples** (14,400 vs 230,228).
+- **Scales to a changing task suite.** In continual task-addition, layer-wise merging is the only method that keeps every retained task above 0.60 recovery across all five task orders.
+- **20.7× lower peak GPU memory** for gradient-based merging, by applying weighted LoRA products in a fused forward pass instead of materialising dense deltas (2.1 GiB vs 44.5 GiB, RTX 6000 Ada).
 
-The main workflow is:
+| Method (7-task merge) | Parameters fit to combine tasks | Mean recovery ↑ | Worst-task recovery ↑ | ASR WER ↓ |
+| --- | ---: | ---: | ---: | ---: |
+| Uniform averaging | 0 | 0.551 | 0.156 | 1.90% |
+| DARE | 0 | 0.595 | 0.167 | 1.88% |
+| TIES | 0 | 0.880 | 0.424 | 1.81% |
+| Scalar (Bayesian-optimised γ) | 1 | 0.956 | 0.375 | **1.72%** |
+| **Layer-wise (this work)** | **296** | **1.011** | **0.773** | 1.81% |
+| Matched MTL | 164.6M | 0.903 | 0.338 | 2.24% |
 
-1. Train one LoRA adapter per speech task.
-2. Evaluate adapters on their own task and, where useful, across other tasks.
-3. Run joint multi-task training as a comparison baseline.
-4. Search merge coefficients and evaluate merged adapters.
-5. Run continual merge/evaluation experiments for adding tasks after an initial adapter set.
-6. Save metrics, summaries, and run artifacts for later analysis.
+<sub>Recovery is headroom-normalised: 0 = frozen backbone, 1 = the task's own single-task adapter. References: backbone 2.35% WER, single-task ASR adapter 2.02% WER (LibriSpeech test-clean). All numbers are held-out test results from the thesis.</sub>
 
-The canonical entry point is `main.py`.
+## Where adapters interfere
 
-## Setup
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/interference-dark.png">
+    <img src="assets/interference-light.png" alt="Seven-by-seven matrix of how each single-task adapter changes every task's metric relative to the frozen backbone. Intent and keyword-spotting adapters sharply damage language ID; vocal-sound and speaker adapters improve it." width="680">
+  </picture>
+</p>
 
-Install dependencies:
+Every adapter improves its own task (diagonal), but off-diagonal effects are large and asymmetric: intent and keyword adapters damage language ID through a shifted label prior (the model over-predicts English), while vocal-sound adapters *improve* ASR and LID. Beneficial and harmful effects coexisting in one adapter set is exactly why calibration, rather than simple addition, works.
 
-```bash
-python3 -m pip install -r requirements.txt
+## Method
+
+```mermaid
+flowchart LR
+    B[Frozen Qwen2.5-Omni-3B] --> T1[LoRA adapter · task 1]
+    B --> T2[LoRA adapter · task 2]
+    B --> T7[LoRA adapter · task 7]
+    T1 & T2 & T7 --> X[Cross-task evaluation<br/>7 × 7 interference matrix]
+    X --> M[Calibrated merge<br/>coefficients fit on dev split]
+    M --> E[Held-out test<br/>mean + worst-task recovery]
 ```
 
-The default configs expect the base model at:
+1. **Task vectors.** Each task gets one LoRA adapter (rank 64, α = 128, on attention, MLP and audio projector). Its effective update $\Delta W_t = \tfrac{\alpha}{r} B_t A_t$ is a task vector $\tau_t$ relative to the frozen backbone.
+2. **Merging.** The merged model is $\theta_0 + \sum_t \lambda_{t} \tau_t$. *Scalar* sets $\lambda_t = \gamma$ by Bayesian optimisation; *Layer-wise* learns $\lambda_{t,\ell} = \beta_\ell w_{\ell,t}$ per layer by gradient descent on development data, with source adapters frozen.
+3. **Evaluation.** Recovery $R_i = (m_i^{\text{merge}} - m_i^{\text{base}}) / (m_i^{\text{single}} - m_i^{\text{base}})$, reported as both mean and **worst-task** — because a mean can hide one broken task.
+4. **Baselines.** Uniform averaging, TIES, DARE, a capacity-matched joint MTL adapter, and sequential MTL for continual addition.
+
+## Repository structure
 
 ```text
-data/models/Qwen2.5-Omni-3B
+main.py          Unified CLI: train, evaluate, mtl, merge, merge-sweep, continual-merge, ...
+configs/         YAML configs for tasks, merges (uniform, scalar, TIES, DARE, layer-wise), MTL, continual
+core/            Config, data, training, evaluation and results utilities
+tasks/           Per-task datasets, prompts, collators and metrics (ASR, ER, IC, KWS, LID, SV, VS, SQA)
+merging/         Task-vector sources, merge methods, coefficient optimisers, continual merging
+scripts/         Experiment runners, result builders and the plotting code behind the thesis figures
+tests/           Unit and integration tests (pytest)
+docs/            MEng thesis (PDF)
 ```
 
-Several datasets are loaded from Hugging Face. Some configs also expect local data under `data/datasets/`, including MELD, VocalSound, and optional Spoken-SQuAD compatibility data.
+## Reproducing
 
-## Quickstart
-
-Train and evaluate a single-task adapter:
+Requires a CUDA GPU (experiments ran on a 48 GB RTX 6000 Ada) and the Qwen2.5-Omni-3B weights at `data/models/Qwen2.5-Omni-3B`. Most datasets load from Hugging Face; MELD and VocalSound are expected under `data/datasets/`.
 
 ```bash
-python3 main.py train --task asr --config asr.yaml
-python3 main.py evaluate --task asr --config asr.yaml --split validation
-```
+pip install -r requirements.txt
 
-Evaluate a trained adapter:
+# 1. Train and evaluate a single-task adapter
+python main.py train    --task intent --config intent.yaml
+python main.py evaluate --task intent --config intent.yaml --split test
 
-```bash
-python3 main.py evaluate \
-  --task intent \
-  --config intent.yaml \
-  --adapter artifacts/intent/adapters/qwen2_5_omni_lora_intent/best \
-  --split test
-```
-
-Run joint multi-task training:
-
-```bash
-python3 main.py mtl --config configs/mtl/joint/mtl_intent_kws_langid_asr_emotion_vocalsound.yaml
-```
-
-Run a merge sweep:
-
-```bash
-python3 main.py merge-sweep \
-  --config configs/merge/supermerge/merge_supermerge_emotion_intent_kws_langid_speaker_ver_asr_vocalsound.yaml
-```
-
-Evaluate a merged adapter:
-
-```bash
-python3 main.py evaluate-merged \
+# 2. Seven-task layer-wise merge (fit coefficients, then evaluate on test)
+python main.py merge-sweep --config configs/merge/supermerge/merge_supermerge_emotion_intent_kws_langid_speaker_ver_asr_vocalsound.yaml
+python main.py evaluate-merged \
   --config configs/merge/supermerge/merge_supermerge_emotion_intent_kws_langid_speaker_ver_asr_vocalsound.yaml \
-  --eval-tasks emotion intent kws langid speaker_ver asr vocalsound \
-  --split test
+  --eval-tasks emotion intent kws langid speaker_ver asr vocalsound --split test
+
+# 3. Joint-MTL baseline (the task suite is set by `tasks:` in the config)
+python main.py mtl --config configs/mtl/joint/mtl_intent_kws_langid_asr_emotion_vocalsound.yaml
+
+# Tests that need no model or data
+cd tests && pytest -m "not requires_model and not requires_data and not requires_network"
 ```
 
-Run a continual merge experiment:
+Scalar, TIES and DARE merges use the matching configs in `configs/merge/uniform_scalar_delta/`, `ties/` and `dare/`; continual paths are defined in `configs/continual/`.
 
-```bash
-python3 main.py continual-merge \
-  --x-source artifacts/continual/<existing_artifact> \
-  --y-source asr \
-  --alpha 1.0 \
-  --lambda 0.75
+## Tech stack
+
+PyTorch · Hugging Face Transformers, PEFT and Datasets · Qwen2.5-Omni-3B · LoRA · Bayesian optimisation · jiwer · Weights & Biases · pytest
+
+## Citation
+
+```bibtex
+@mastersthesis{rajaram2026merging,
+  author = {Ebinezer Rajaram},
+  title  = {Model Merging and Task Overfitting in Speech {LLMs}},
+  school = {University of Cambridge},
+  type   = {{MEng} thesis},
+  year   = {2026}
+}
 ```
 
-Evaluate a continual artifact:
+## Acknowledgements
 
-```bash
-python3 main.py evaluate-continual \
-  --artifact-path artifacts/continual/<artifact_dir> \
-  --eval-tasks emotion intent kws langid speaker_ver asr \
-  --split test
-```
-
-## Supported Tasks
-
-| Task key | Config | Default data source | Primary purpose |
-| --- | --- | --- | --- |
-| `asr` | `configs/asr.yaml` | `librispeech_asr` | Automatic speech recognition |
-| `emotion` | `configs/emotion.yaml` | local MELD data | Emotion classification |
-| `intent` | `configs/intent.yaml` | `marcel-gohsen/slurp` | Spoken intent classification |
-| `kws` | `configs/kws.yaml` | `google/speech_commands` | Keyword spotting |
-| `langid` | `configs/langid.yaml` | `google/fleurs` | Spoken language identification |
-| `speaker_id` | `configs/speaker_id.yaml` | `acul3/voxceleb2` | Speaker identification |
-| `speaker_ver` | `configs/speaker_ver.yaml` | `acul3/voxceleb2` | Speaker verification |
-| `speech_qa` | `configs/speech_qa.yaml` | `ddwang2000/MMSU` | Speech question answering |
-| `st` | `configs/st.yaml` | `fixie-ai/covost2` | Speech translation |
-| `vocalsound` | `configs/vocalsound.yaml` | local VocalSound data | Vocal sound classification |
-
-## Repository Structure
-
-```text
-main.py                 Unified CLI entry point
-configs/                Task, merge, joint MTL, and continual experiment configs
-core/                   Shared config, data, training, evaluation, and output utilities
-tasks/                  Task-specific dataset loaders, collators, configs, and metrics
-merging/                Adapter sources, merge methods, optimizers, sweeps, and continual logic
-scripts/                Grouped experiment, evaluation, analysis, data, and maintenance scripts
-tests/                  Unit and integration tests for datasets, metrics, merging, and continual flows
-data/                   Local models and datasets (generated/local, not tracked)
-artifacts/              Adapter checkpoints, metrics, summaries, and merge outputs
-runs/                   Run bundles and experiment outputs
-logs/                   Runtime, TensorBoard, and wandb logs
-```
-
-## Outputs And Results
-
-Experiment outputs are generated locally and are generally ignored by git. Common locations are:
-
-- `artifacts/<task>/adapters/` for trained task adapters,
-- `artifacts/<task>/metrics/` for task-level evaluations,
-- `artifacts/merged/` for merged-adapter evaluations,
-- `artifacts/mtl/` for joint multi-task runs,
-- `artifacts/continual/` and `artifacts/continual_suite/` for continual experiments,
-- `runs/` and `logs/` for run bundles and logging output.
-
-Some local summary CSVs may be present under `artifacts/`, such as comparisons between base-model, single-task, and merged-adapter metrics. Treat these as generated experiment outputs tied to the commands, configs, and checkpoints used to create them.
-
-## Reproducibility Notes
-
-For each experiment, record:
-
-- the exact command,
-- the config file path,
-- the model checkpoint path,
-- the adapter or artifact path,
-- the evaluation split,
-- the random seed in the config,
-- the output directory under `artifacts/`, `runs/`, or `logs/`.
-
-For final comparisons, use matched tasks, splits, checkpoints, and metric definitions. ASR uses WER-oriented metrics, classification tasks report accuracy/F1-style metrics, and Speech-QA uses option-letter accuracy for MMSU-style evaluation.
+MEng thesis, Department of Engineering, University of Cambridge (2026), supervised by Professor Phil Woodland and Dr Guangzhi Sun.
