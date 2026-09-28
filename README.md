@@ -2,12 +2,7 @@
 
 Independently trained LoRA adapters for a 3B-parameter Speech LLM quietly break each other's tasks. This project measures that failure, diagnoses it, and fixes it with calibrated post-hoc merging — no joint retraining required.
 
-[![Thesis PDF](https://img.shields.io/badge/MEng_thesis-PDF-b31b1b?logo=adobeacrobatreader&logoColor=white)](docs/Rajaram_2026_MEng_Thesis_Model_Merging_Speech_LLMs.pdf)
-![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
-![PyTorch](https://img.shields.io/badge/PyTorch-2.9-EE4C2C?logo=pytorch&logoColor=white)
-![Backbone](https://img.shields.io/badge/backbone-Qwen2.5--Omni--3B-6f42c1)
-![University of Cambridge](https://img.shields.io/badge/University_of_Cambridge-MEng_thesis-a3c1ad)
-[![License](https://img.shields.io/badge/license-Apache_2.0-blue)](LICENSE.md)
+**[MEng thesis (PDF)](docs/Rajaram_2026_MEng_Thesis_Model_Merging_Speech_LLMs.pdf)** · University of Cambridge, 2026 · supervised by Prof. Phil Woodland and Dr Guangzhi Sun
 
 <p align="center">
   <picture>
@@ -124,6 +119,12 @@ PyTorch · Hugging Face Transformers, PEFT and Datasets · Qwen2.5-Omni-3B · Lo
 }
 ```
 
+A [`CITATION.cff`](CITATION.cff) is included, so GitHub's *Cite this repository* button gives the same entry.
+
 ## Acknowledgements
 
 MEng thesis, Department of Engineering, University of Cambridge (2026), supervised by Professor Phil Woodland and Dr Guangzhi Sun.
+
+## Licence
+
+[Apache 2.0](LICENSE.md)

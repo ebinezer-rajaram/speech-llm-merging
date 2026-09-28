@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this code or build on these results, please cite the thesis."
+title: "Model Merging and Task Overfitting in Speech LLMs"
+authors:
+  - family-names: Rajaram
+    given-names: Ebinezer
+repository-code: "https://github.com/ebinezer-rajaram/speech-llm-merging"
+license: Apache-2.0
+keywords:
+  - speech LLM
+  - model merging
+  - LoRA
+  - task arithmetic
+  - multi-task learning
+  - continual learning
+preferred-citation:
+  type: thesis
+  thesis-type: "MEng thesis"
+  title: "Model Merging and Task Overfitting in Speech LLMs"
+  authors:
+    - family-names: Rajaram
+      given-names: Ebinezer
+  institution:
+    name: "University of Cambridge"
+  department: "Department of Engineering"
+  year: 2026
+  month: 6
+  url: "https://github.com/ebinezer-rajaram/speech-llm-merging/blob/main/docs/Rajaram_2026_MEng_Thesis_Model_Merging_Speech_LLMs.pdf"
