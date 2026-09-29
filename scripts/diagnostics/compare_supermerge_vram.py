@@ -12,12 +12,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
-
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib-codex")
 
 import torch
 from safetensors import safe_open
